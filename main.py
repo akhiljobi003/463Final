@@ -41,28 +41,95 @@ class Location:
         return f"{self.name} ({self.street}, {self.city}, {self.state})"
 
 class LocationGraph:
-    """Improved graph class with more robust methods"""
     def __init__(self):
         self.nodes: Dict[str, Location] = {}
         self.adjacency_list: Dict[str, List[Tuple[str, float]]] = {}
 
     def add_location(self, location: Location):
-        """Add a location to the graph"""
         self.nodes[location.name] = location
         self.adjacency_list[location.name] = []
 
     def add_connection(self, from_node: str, to_node: str, distance: float):
-        """Add bidirectional connection between nodes"""
         self.adjacency_list[from_node].append((to_node, distance))
         self.adjacency_list[to_node].append((from_node, distance))
 
+    def dijkstra(self, start: str) -> Dict[str, float]:
+        distances = {node: float('infinity') for node in self.nodes}
+        distances[start] = 0
+        pq = [(0, start)]
+
+        while pq:
+            current_distance, current_node = heapq.heappop(pq)
+
+            if current_distance > distances[current_node]:
+                continue
+
+            for neighbor, weight in self.adjacency_list[current_node]:
+                distance = current_distance + weight
+                if distance < distances[neighbor]:
+                    distances[neighbor] = distance
+                    heapq.heappush(pq, (distance, neighbor))
+
+        return distances
+
+
 class LocationFinder:
-    """Centralized class for location-related operations"""
     def __init__(self, locations_file: str):
-        """Initialize with locations from CSV"""
         self.locations = self._read_csv_data(locations_file)
         self.graph = self._build_graph()
         self.console = Console()
+
+    def _build_graph(self) -> LocationGraph:
+        graph = LocationGraph()
+        for location in self.locations:
+            graph.add_location(location)
+        for i, loc1 in enumerate(self.locations):
+            for loc2 in self.locations[i + 1:]:
+                distance = self._haversine_distance(loc1.lat, loc1.lon, loc2.lat, loc2.lon)
+                graph.add_connection(loc1.name, loc2.name, distance)
+        return graph
+
+    def find_nearest_stations(self, user_lat: float, user_lon: float, top_n: int = 3) -> List[Location]:
+        # Create a temporary node for the user's location
+        user_node = Location("User", "", "", "", user_lat, user_lon)
+        self.graph.add_location(user_node)
+
+        # Connect user node to all other nodes
+        for location in self.locations:
+            distance = self._haversine_distance(user_lat, user_lon, location.lat, location.lon)
+            self.graph.add_connection("User", location.name, distance)
+
+        # Run Dijkstra's algorithm from the user's location
+        distances = self.graph.dijkstra("User")
+
+        # Sort locations by distance and return top N
+        sorted_locations = sorted(
+            [(dist, self.graph.nodes[name]) for name, dist in distances.items() if name != "User"])
+
+        # Remove the temporary user node
+        self.graph.nodes.pop("User")
+        self.graph.adjacency_list.pop("User")
+
+        return [location for _, location in sorted_locations[:top_n]]
+
+    def display_nearest_stations(self, user_lat: float, user_lon: float, top_n: int = 3):
+        nearest_stations = self.find_nearest_stations(user_lat, user_lon, top_n)
+        table = Table(title=f"Top {top_n} Nearest Stations")
+        table.add_column("Rank", justify="right", style="cyan")
+        table.add_column("Station Name", style="magenta")
+        table.add_column("Address", style="green")
+        table.add_column("Distance (km)", justify="right", style="yellow")
+
+        for i, station in enumerate(nearest_stations, 1):
+            distance = self._haversine_distance(user_lat, user_lon, station.lat, station.lon)
+            table.add_row(
+                str(i),
+                station.name,
+                f"{station.street}, {station.city}, {station.state}",
+                f"{distance:.2f}"
+            )
+
+        self.console.print(table)
 
     def _read_csv_data(self, filename: str) -> List[Location]:
         """Enhanced CSV reading with more robust error handling"""
@@ -129,14 +196,14 @@ class LocationFinder:
         c = 2 * math.asin(math.sqrt(a))
         return R * c
 
-    def find_nearest_stations(self, user_lat: float, user_lon: float, top_n: int = 5) -> List[Location]:
+    def find_nearest_stations(self, user_lat: float, user_lon: float, top_n: int = 3) -> List[Location]:
         stations_with_distance = [
             (self._haversine_distance(user_lat, user_lon, loc.lat, loc.lon), loc)
             for loc in self.locations
         ]
         return [station for _, station in sorted(stations_with_distance)[:top_n]]
 
-    def display_nearest_stations(self, user_lat: float, user_lon: float, top_n: int = 5):
+    def display_nearest_stations(self, user_lat: float, user_lon: float, top_n: int = 3):
         nearest_stations = self.find_nearest_stations(user_lat, user_lon, top_n)
         table = Table(title=f"Top {top_n} Nearest Stations")
         table.add_column("Rank", justify="right", style="cyan")
@@ -200,7 +267,7 @@ def main():
         user_lat, user_lon = location_finder.geocode_city(matched_city)
         console.rule(f"[bold blue]Top {args.top_n} Nearest Locations to {matched_city}[/]")
         location_finder.display_nearest_stations(user_lat, user_lon, args.top_n)
-        
+
     except Exception as e:
         logger.error(f"An error occurred: {e}")
 
